@@ -20,7 +20,7 @@ def _synread(synId, f, syn_):
         d = q.asDataFrame();
     return d
 
-def clipboardToDict(sep=" "):
+def convertClipboardToDict(sep=" "):
     df = pd.read_clipboard(sep, header=None)
     d = {k: v for k, v in zip(df[0], df[1])}
     return d
@@ -56,11 +56,29 @@ def combineSynapseTabulars(syn, tabulars):
     tabulars = synread(syn, tabulars)
     return pd.concat(tabulars, axis=1, ignore_index=True)
 
-def makeColFromRegex(df, col, regex):
+def makeColFromRegex(referenceList, regex):
+    """ Return a list created by mapping a regular expression to another list.
+    The regular expression must contain at least one capture group.
+
+    Params
+    ------
+    referenceList : list-like
+        A list to derive new values from.
+    regex : str
+        A regular expression to be applied.
+
+    Returns
+    -------
+    newCol, list
+        The list resulting from mapping `regex` to `referenceList`.
+    """
+    if regex == 'extension': regex = r"\.(\w+)(?:\.gz)?$"
     p = re.compile(regex)
+    if not p.groups:
+        raise RuntimeError("`regex` must have at least one capture group.")
     newCol = []
-    for s in df[col].values:
+    for s in referenceList:
         m = p.search(s)
         if not m: print("{} does not match regex.".format(s))
-        newCol.append(m.group()) if m else newCol.append(None)
+        newCol.append(m.group(1)) if m else newCol.append(None)
     return newCol

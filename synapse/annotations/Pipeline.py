@@ -2,6 +2,7 @@ import pandas as pd
 import synapseclient as sc
 import json
 from . import utils
+from copy import deepcopy
 
 class Pipeline:
     """ Annotations pipeline object. """
@@ -11,7 +12,7 @@ class Pipeline:
     def __init__(self, syn, view=None, activeCols=None, meta=None):
         self.syn = syn
         self.df = utils.synread(
-                self.syn, view) if isinstance(view, str) else view
+                self.syn, view) if isinstance(view, str) else deepcopy(view)
         self.activeCols = []
         if activeCols: self.addActiveCols(activeCols)
         self.meta = self.parseMetadata(meta)
@@ -53,7 +54,7 @@ class Pipeline:
         elif isinstance(metadata, list):
             self.meta = utils.combineSynapseTabulars(self.syn, metadata)
         else:
-            self.meta = metadata
+            self.meta = deepcopy(metadata)
 
     def undo(self):
         if self.backup:
@@ -92,6 +93,11 @@ class Pipeline:
         if backup: self._backup("addDefaultValues")
         for k in colVals:
             self.df[k] = colVals[k]
+
+    def addFileFormatCol(self, referenceCol='name', fileFormatColName='fileFormat'):
+        self._backup("addFiletypeCol")
+        filetypeCol = utils.makeColFromRegex(self.df[referenceCol].values, "extension")
+        self.df[fileFormatColName] = filetypeCol
 
     def newFileView(self, name, parent, scope, addCols=None):
         self._backup("newFileView")
