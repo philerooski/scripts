@@ -144,7 +144,6 @@ def storeSubmissions(syn, evaluationQueue, synProject=None, filetype="csv"):
         synProject = syn.store(synProject).id
         logger.info("Synapse project created at {}".format(synProject))
     for submission in glob.glob("{}/*.{}".format(TEST_SUBMISSION_PATH, filetype)):
-        print("doing something")
         logger.info("Storing {} to {} and submitting to {}".format(
             submission, synProject, evaluationQueue))
         synFile = sc.File(submission, parent=synProject)
