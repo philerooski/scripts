@@ -2,23 +2,26 @@ import pandas as pd
 import synapseclient as sc
 import re
 
-def synread(syn_, synId):
+def synread(syn_, synId, sortCols=True):
     #if "syn" in globals(): syn_ = syn
     if isinstance(synId, str):
         f = syn_.get(synId)
-        d = _synread(synId, f, syn_)
+        d = _synread(synId, f, syn_, sortCols)
     else: # is list-like
         files = list(map(syn_.get, synId))
-        d = [_synread(synId_, f, syn_) for synId_, f in zip(synId, files)]
+        d = [_synread(synId_, f, syn_, sortCols) for synId_, f in zip(synId, files)]
     return d
 
-def _synread(synId, f, syn_):
+def _synread(synId, f, syn_, sortCols):
     if isinstance(f, sc.entity.File):
         d = pd.read_csv(f.path, header="infer", sep=None, engine="python")
     elif isinstance(f, sc.table.EntityViewSchema):
         q = syn_.tableQuery("select * from %s" % synId)
         d = q.asDataFrame();
-    return d
+    if sortCols:
+        return d.sort_index(1)
+    else:
+        return d
 
 def convertClipboardToDict(sep=" "):
     df = pd.read_clipboard(sep, header=None)
@@ -54,7 +57,7 @@ def makeColumns(obj, asSynapseCols=True):
 
 def combineSynapseTabulars(syn, tabulars):
     tabulars = synread(syn, tabulars)
-    return pd.concat(tabulars, axis=1, ignore_index=True)
+    return pd.concat(tabulars, axis=1, ignore_index=True).sort_index(1)
 
 def makeColFromRegex(referenceList, regex):
     """ Return a list created by mapping a regular expression to another list.

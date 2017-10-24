@@ -1,5 +1,6 @@
 import pandas as pd
 import synapseclient as sc
+import readline
 import json
 from . import utils
 from copy import deepcopy
@@ -9,21 +10,30 @@ class Pipeline:
 
     BACKUP_LENGTH = 50
 
-    def __init__(self, syn, view=None, activeCols=None, meta=None,
-            metaActiveCols=None,link=None):
+    def __init__(self, syn, view=None, meta=None, activeCols=[],
+            metaActiveCols=[], link=None, sortCols=True):
         self.syn = syn
-        self.df = utils.synread(
-                self.syn, view) if isinstance(view, str) else deepcopy(view)
+        self.df = view if view is None else self._parseView(view, sortCols)
+        self.schema = syn.get(view, downloadFile=False) if isinstance(
+                view, str) else None
+        self.index = self.df.index if isinstance(
+                self.df, pd.core.frame.DataFrame) else None
         self.activeCols = []
         if activeCols: self.addActiveCols(activeCols)
-        self.meta = self.parseMetadata(meta)
-        self.metaActiveCols = metaActiveCols
+        self.meta = meta if meta is None else self._parseView(meta, sortCols)
+        self.metaActiveCols = []
+        if metaActiveCols: self.addActiveCols(metaActiveCols, meta=True)
+        self.sortCols = sortCols
+        self.keyCol = None
         self.link = link
+        self.index = None
+        self.schema = None
         self.backup = []
 
     def _backup(self, message):
         self.backup.append((Pipeline(
-            self.syn, self.df, self.activeCols, self.meta), message))
+            self.syn, self.df, self.meta, self.activeCols, self.metaActiveCols,
+            self.link, self.sortCols), message))
         if len(self.backup) > self.BACKUP_LENGTH:
             self.backup = self.backup[1:]
 
@@ -41,13 +51,28 @@ class Pipeline:
         print(self.df.head())
 
     def columns(self, style="letters"):
-        self._prettyPrintColumns(self.df.columns, style)
+        if hasattr(self.df, 'columns'):
+            self._prettyPrintColumns(self.df.columns, style)
+        else:
+            print("No columns.")
 
     def metaColumns(self, style="letters"):
-        self._prettyPrintColumns(self.meta.columns, style)
+        if hasattr(self.meta, 'columns'):
+            self._prettyPrintColumns(self.meta.columns, style)
+        else:
+            print("No columns.")
 
     def activeColumns(self, style="letters"):
-        self._prettyPrintColumns(self.activeCols, style)
+        if self.activeCols:
+            self._prettyPrintColumns(self.activeCols, style)
+        else:
+            print("No active columns.")
+
+    def metaActiveColumns(self, style="letters"):
+        if self.metaActiveCols:
+            self._prettyPrintColumns(self.metaActiveColumns, style)
+        else:
+            print("No active columns.")
 
     def addActiveCols(self, activeCols, path=False, meta=False):
         # activeCols can be a str, list, dict, or DataFrame
@@ -76,15 +101,51 @@ class Pipeline:
         for k in colVals:
             self.df[k] = colVals[k]
 
+    def addKeyCol(self):
+        link = self._linkData(1)
+        dataKey, metaKey = link.popitem()
+        regex = ''
+        print("Data", "\n\n")
+        print(self.df[dataKey].head(), "\n\n")
+        print("Metadata", "\n\n")
+        print(self.meta[metaKey].head(), "\n\n")
+        while True:
+            regex = self._inputDefault("regex: ", regex)
+            newCol = utils.makeColFromRegex(self.df[dataKey].values, regex)
+            missingVals = [not v in newCol for v in self.meta[metaKey].values]
+            if any(missingVals):
+                before_regex = self.df[dataKey][missingVals]
+                after_regex = [newCol[i] for i in range(len(newCol)) if missingVals[i]]
+                print("The following values were not found in the metadata:")
+                for i in range(len(before_regex)):
+                    print(after_regex[i], "<-", before_regex[i])
+                continue
+            else:
+                break
+        self.keyCol = metaKey
+        self.df[metaKey] = newCol
+
+    def _inputDefault(self, prompt, prefill=''):
+        readline.set_startup_hook(lambda: readline.insert_text(prefill))
+        try:
+            return input(prompt)
+        finally:
+           readline.set_startup_hook()
+
     def addFileFormatCol(self, referenceCol='name', fileFormatColName='fileFormat'):
         self._backup("addFiletypeCol")
         filetypeCol = utils.makeColFromRegex(self.df[referenceCol].values, "extension")
         self.df[fileFormatColName] = filetypeCol
 
     def linkMetadata(self, links=None):
-        if links: self.links = links
-        else:
-            pass
+        self._backup("linkMetadata")
+        if links is None:
+            links = self._linkData(-1)
+        for v in links.values():
+            if not v in self.metaActiveCols:
+                self.metaActiveCols.append(v)
+        self.link = links
+        return links
 
     def modifyColumn(self, col, mod):
         oldCol = self.df[col].values
@@ -92,7 +153,19 @@ class Pipeline:
             newCol = [mod[v] for v in oldCol]
         self.df[col] = newCol
 
-    def parseMetadata(self, metadata):
+    def _parseView(self, view, sortCols):
+        if isinstance(view, str):
+            return utils.synread(self.syn, view, sortCols)
+        elif isinstance(view, list):
+            return utils.combineSynapseTabulars(self.syn, view)
+        elif isinstance(view, pd.core.frame.DataFrame):
+            if sortCols:
+                view = view.sort_index(1)
+            return deepcopy(view)
+        else:
+            raise TypeError("{} is not a supported data input type".format(type(view)))
+
+    def parseMetadata(self, metadata, sortCols):
         # metadata can be a str, list, or DataFrame
         if isinstance(metadata, str):
             return utils.synread(self.syn, metadata)
@@ -101,6 +174,46 @@ class Pipeline:
         else:
              return deepcopy(metadata)
 
+    def publish(self, verify = True):
+        warnings = self._validate()
+        if len(warnings):
+            for w in warnings:
+                print(w)
+            print()
+            print("Proceed anyways? (y) or (n): ", end='')
+            proceed = ''
+            while not len(proceed):
+                proceed = input()
+                if len(proceed) and not proceed[0] in ['Y', 'y', 'N', 'n']:
+                    proceed = ''
+                    print("Please enter 'y' or 'n': ", end='')
+                elif len(proceed) and proceed[0].lower() == 'y':
+                    continue
+                elif len(proceed) and proceed[0].lower() == 'n':
+                    print("Publish canceled.")
+                    return
+        t = sc.Table(self.schema.id, self.df)
+        print("Storing to Synapse...")
+        t_online = self.syn.store(t)
+        print("Fetching new table index...")
+        self.df = utils.synread(self.syn, self.schema.id)
+        self.index = self.df.index
+        print("You're good to go :~)")
+        self.onweb()
+
+    def onweb(self):
+        self.syn.onweb(self.schema.id)
+
+    def _validate(self):
+        warnings = []
+        # check that no columns have null values
+        null_cols = self.df[self.activeCols].isnull().any()
+        for i in null_cols.iteritems():
+            col, hasna = i
+            if hasna:
+                warnings.append("{} has null values.".format(col))
+        return warnings
+
     def removeActiveCols(self, activeCols):
         if isinstance(activeCols, str):
             self.activeCols.remove(activeCols)
@@ -108,9 +221,16 @@ class Pipeline:
             for c in activeCols:
                 self.activeCols.remove(c)
 
-    def _dropDuplicateCols(self, cols, preexistingCols):
+    def _getUniqueCols(self, newCols, preexistingCols):
         preexistingColNames = [c['name'] for c in preexistingCols]
-        uniqueCols = [c for c in cols if not c['name'] in preexistingCols]
+        uniqueCols = []
+        for c in newCols:
+            if c['name'] in preexistingColNames:
+                # default behavior is to replace the older column with the newer.
+                isCol = [c_['name'] == c['name'] for c_ in preexistingCols]
+                preexistingCols.pop(isCol.index(True))
+            uniqueCols.append(c)
+        uniqueCols += preexistingCols
         return uniqueCols
 
     def valueCounts(self):
@@ -140,10 +260,13 @@ class Pipeline:
                 json.dumps(params))['results']
         if self.activeCols:
             activeCols = utils.makeColumns(self.activeCols, asSynapseCols=False)
-            cols += self._dropDuplicateCols(activeCols, cols)
+            cols = self._getUniqueCols(activeCols, cols)
         if addCols:
+            for k in addCols:
+                if addCols[k] is None and not k in self.activeCols:
+                    self.activeCols.append(k)
             newCols = utils.makeColumns(addCols, asSynapseCols=False)
-            cols += self._dropDuplicateCols(newCols, cols)
+            cols = self._getUniqueCols(newCols, cols)
         cols = [sc.Column(**c) for c in cols]
         schema = sc.EntityViewSchema(name=name, columns=cols,
                 parent=parent, scopes=scope)
@@ -151,7 +274,7 @@ class Pipeline:
         self.df = utils.synread(self.syn, self.schema.id)
         self.index = self.df.index
         if isinstance(addCols, dict): self.addDefaultValues(addCols, False)
-        print("File view created here: {}".format(self.schema.id))
+        return self.schema.id
 
     def inferValues(self, col, referenceCols):
         self._backup("inferValues")
@@ -165,16 +288,55 @@ class Pipeline:
                 print("Unable to infer value when {} = {}".format(
                     referenceCols, k))
 
-    def transferMetadata(self, on, cols=None, how='left'):
+    def transferMetadata(self, cols=None, on=None, how='left', dropOn=True):
+        if on is None: on = self.keyCol
+        if not self.link: raise RuntimeError("Need to link metadata values first.")
         self._backup("transferMetadata")
         if not cols:
-            cols = list(self.links.keys())
-            cols.pop(cols.index(on))
-        relevant_meta = self.meta[list(self.links.values())]
-        merged = self.df.merge(relevant_meta, left_on=on, right_on=self.links[on], how=how)
+            cols = list(self.link.keys())
+            if on in cols:
+                cols.pop(cols.index(on))
+        relevant_meta = self.meta[list(set(self.link.values()))]
+        merged = self.df.merge(relevant_meta, on=on, how=how)
         merged = merged.drop_duplicates()
         print("original", self.df.shape)
         print("merged", merged.shape)
         for c in cols:
-            self.df[c] = merged[self.links[c]].values
+            self.df[c] = merged[self.link[c]].values
+        if dropOn:
+            self.df.drop(on, 1, inplace=True)
 
+    def _linkData(self, iters):
+        links = {}
+        def _verifyInputIntegrity(i):
+            if i is '': return -1
+            try:
+                i = int(i)
+                assert i < len(self.df.columns) and i >= 0
+            except:
+                print("Please enter an integer corresponding to "
+                        "one of the columns above.", "\n")
+                return
+            return i
+        while iters != 0:
+            print("Data:", "\n")
+            self.columns("numbers")
+            print()
+            data_col = None
+            while data_col is None:
+                data_col = input("Select a data column: ")
+                data_col = _verifyInputIntegrity(data_col)
+            if data_col == -1: return links
+            print("\n", "Metadata", "\n")
+            self.metaColumns("numbers")
+            print()
+            metadata_col = None
+            while metadata_col is None:
+                metadata_col = input("Select a metadata column: ")
+                metadata_col = _verifyInputIntegrity(metadata_col)
+            if metadata_col == -1: return links
+            data_val = self.df.columns[data_col]
+            metadata_val = self.meta.columns[metadata_col]
+            links[data_val] = metadata_val
+            iters -= 1
+        return links

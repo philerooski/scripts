@@ -88,14 +88,7 @@ def writeSubmissions(sampleSubmission, indexCols=None, filetype="csv"):
     sample.to_csv("{}/wrongDelimiter.{}".format(
         TEST_SUBMISSION_PATH, filetype), sep="\\")
     # duplicated indices
-    duplicated = sample.copy(deep=True)
-    if len(duplicated.index.names) == 1:
-        duplicated[duplicated.index.names[0]] = duplicated.index.values
-    else:
-        for i in range(len(duplicated.index.values[0])): # iterate through index cols
-            duplicated[duplicated.index.names[i]] = \
-                    [r[i] for r in duplicated.index.values]
-    duplicated.to_csv("{}/duplicateIndices.{}".format(
+    sample.append(sample.iloc[0]).to_csv("{}/duplicateIndices.{}".format(
         TEST_SUBMISSION_PATH, filetype), sep=delimiter)
     # one, two, and five columns of random floats, ints, strings with/without NAs
     for i, t, na in product([1,2,5], [float, int, str], [True, False]):
@@ -155,6 +148,7 @@ def main():
         os.makedirs(TEST_SUBMISSION_PATH)
     syn = sc.login()
     args = readargs()
+    args.filetype = "csv" if not args.filetype else args.filetype
     indexCols = None if not args.indexCols else args.indexCols.split(",")
     writeSubmissions(args.sampleSubmission, indexCols, args.filetype)
     storeSubmissions(syn, args.evaluationQueue, args.synProject, args.filetype)
