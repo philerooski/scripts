@@ -14,7 +14,7 @@ class Pipeline:
             metaActiveCols=[], link=None, sortCols=True):
         self.syn = syn
         self.df = view if view is None else self._parseView(view, sortCols)
-        self.schema = syn.get(view, downloadFile=False) if isinstance(
+        self.schema = self.syn.get(view, downloadFile=False) if isinstance(
                 view, str) else None
         self.index = self.df.index if isinstance(
                 self.df, pd.core.frame.DataFrame) else None
@@ -106,20 +106,29 @@ class Pipeline:
         dataKey, metaKey = link.popitem()
         regex = ''
         print("Data", "\n\n")
+        print("head")
         print(self.df[dataKey].head(), "\n\n")
+        print()
+        print("tail")
+        print(self.df[dataKey].tail(), "\n\n")
         print("Metadata", "\n\n")
         print(self.meta[metaKey].head(), "\n\n")
         while True:
             regex = self._inputDefault("regex: ", regex)
             newCol = utils.makeColFromRegex(self.df[dataKey].values, regex)
-            missingVals = [not v in newCol for v in self.meta[metaKey].values]
+            missingVals = [not v in self.meta[metaKey].values.astype(str) for v in newCol]
             if any(missingVals):
                 before_regex = self.df[dataKey][missingVals]
                 after_regex = [newCol[i] for i in range(len(newCol)) if missingVals[i]]
                 print("The following values were not found in the metadata:")
                 for i in range(len(before_regex)):
                     print(after_regex[i], "<-", before_regex[i])
-                continue
+                print()
+                proceedAnyways = self._getUserConfirmation()
+                if proceedAnyways:
+                    break
+                else:
+                    continue
             else:
                 break
         self.keyCol = metaKey
@@ -137,6 +146,26 @@ class Pipeline:
         filetypeCol = utils.makeColFromRegex(self.df[referenceCol].values, "extension")
         self.df[fileFormatColName] = filetypeCol
 
+    def addLinks(self, links):
+        if not isinstance(links, dict):
+            raise TypeError("`links` must be a dictionary-like object")
+        if not self.link:
+            self.link = links
+        else:
+            for l in links:
+                self.link[l] = links[l]
+        return links
+
+    def isValidKeyPair(self, dataCol=None, metaCol=None):
+        if dataCol is None and metaCol is None:
+            dataCol, metaCol = self._linkData(1).popitem()
+        if set(self.df[dataCol]).difference(self.meta[metaCol]):
+            print("The following values are missing:", end="\n")
+            for i in set(self.df[dataCol]).difference(self.meta[metaCol]):
+                print(i)
+            return False
+        return True
+
     def linkMetadata(self, links=None):
         self._backup("linkMetadata")
         if links is None:
@@ -144,7 +173,7 @@ class Pipeline:
         for v in links.values():
             if not v in self.metaActiveCols:
                 self.metaActiveCols.append(v)
-        self.link = links
+        self.addLinks(links)
         return links
 
     def modifyColumn(self, col, mod):
@@ -180,18 +209,10 @@ class Pipeline:
             for w in warnings:
                 print(w)
             print()
-            print("Proceed anyways? (y) or (n): ", end='')
-            proceed = ''
-            while not len(proceed):
-                proceed = input()
-                if len(proceed) and not proceed[0] in ['Y', 'y', 'N', 'n']:
-                    proceed = ''
-                    print("Please enter 'y' or 'n': ", end='')
-                elif len(proceed) and proceed[0].lower() == 'y':
-                    continue
-                elif len(proceed) and proceed[0].lower() == 'n':
-                    print("Publish canceled.")
-                    return
+            continueAnyways = self._getUserConfirmation()
+            if not continueAnyways:
+                print("Publish canceled.")
+                return
         t = sc.Table(self.schema.id, self.df)
         print("Storing to Synapse...")
         t_online = self.syn.store(t)
@@ -199,7 +220,20 @@ class Pipeline:
         self.df = utils.synread(self.syn, self.schema.id)
         self.index = self.df.index
         print("You're good to go :~)")
-        self.onweb()
+        return self.schema.id
+
+    def _getUserConfirmation(self):
+        print("Proceed anyways? (y) or (n): ", end='')
+        proceed = ''
+        while not len(proceed):
+            proceed = input()
+            if len(proceed) and not proceed[0] in ['Y', 'y', 'N', 'n']:
+                proceed = ''
+                print("Please enter 'y' or 'n': ", end='')
+            elif len(proceed) and proceed[0].lower() == 'y':
+                return True
+            elif len(proceed) and proceed[0].lower() == 'n':
+                return False
 
     def onweb(self):
         self.syn.onweb(self.schema.id)
