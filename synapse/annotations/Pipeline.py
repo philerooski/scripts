@@ -14,8 +14,7 @@ class Pipeline:
             metaActiveCols=[], link=None, sortCols=True):
         self.syn = syn
         self.df = view if view is None else self._parseView(view, sortCols)
-        self.schema = self.syn.get(view, downloadFile=False) if isinstance(
-                view, str) else None
+        self.schema = self.syn.get(view) if isinstance(view,str) else None
         self.index = self.df.index if isinstance(
                 self.df, pd.core.frame.DataFrame) else None
         self.activeCols = []
@@ -26,8 +25,6 @@ class Pipeline:
         self.sortCols = sortCols
         self.keyCol = None
         self.link = link
-        self.index = None
-        self.schema = None
         self.backup = []
 
     def _backup(self, message):
@@ -75,6 +72,7 @@ class Pipeline:
             print("No active columns.")
 
     def addActiveCols(self, activeCols, path=False, meta=False):
+        self._backup("addActiveCols")
         # activeCols can be a str, list, dict, or DataFrame
         if isinstance(activeCols, str) and not path:
             if meta:
@@ -102,6 +100,7 @@ class Pipeline:
             self.df[k] = colVals[k]
 
     def addKeyCol(self):
+        self._backup("addKeyCol")
         link = self._linkData(1)
         dataKey, metaKey = link.popitem()
         regex = ''
@@ -142,11 +141,12 @@ class Pipeline:
            readline.set_startup_hook()
 
     def addFileFormatCol(self, referenceCol='name', fileFormatColName='fileFormat'):
-        self._backup("addFiletypeCol")
+        self._backup("addFileFormatCol")
         filetypeCol = utils.makeColFromRegex(self.df[referenceCol].values, "extension")
         self.df[fileFormatColName] = filetypeCol
 
     def addLinks(self, links):
+        self._backup("addLinks")
         if not isinstance(links, dict):
             raise TypeError("`links` must be a dictionary-like object")
         if not self.link:
@@ -177,6 +177,7 @@ class Pipeline:
         return links
 
     def modifyColumn(self, col, mod):
+        self._backup("modifyColum")
         oldCol = self.df[col].values
         if isinstance(mod, dict):
             newCol = [mod[v] for v in oldCol]
@@ -249,6 +250,7 @@ class Pipeline:
         return warnings
 
     def removeActiveCols(self, activeCols):
+        self._backup("removeActiveCols")
         if isinstance(activeCols, str):
             self.activeCols.remove(activeCols)
         else: # is list-like
@@ -286,7 +288,7 @@ class Pipeline:
                 padding = " " if (len(cols) > 10 and i < 10) else ""
                 print(str(i), "{}|".format(padding), cols[i])
 
-    def newFileView(self, name, parent, scope, addCols=None):
+    def addFileView(self, name, parent, scope, addCols=None):
         self._backup("newFileView")
         if isinstance(scope, str): scope = [scope]
         params = {'scope': scope, 'viewType': 'file'}
@@ -317,7 +319,7 @@ class Pipeline:
         for k, v in values.items():
             v = v[pd.notnull(v)] # filter out na values
             if len(v) == 1:
-                df_.loc[df_[referenceCols] == k, col] = v[0]
+                self.df.loc[self.df[referenceCols] == k, col] = v[0]
             else:
                 print("Unable to infer value when {} = {}".format(
                     referenceCols, k))
