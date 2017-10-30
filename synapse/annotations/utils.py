@@ -39,13 +39,13 @@ def _synread(synId, f, syn_, sortCols):
     else:
         return d
 
-def convertClipboardToDict(sep=" "):
+def convertClipboardToDict(sep):
     """ Parse two-column delimited clipboard contents to a dictionary.
 
     Parameters
     ----------
     sep : str
-        a string or regex to use as delimiter.
+        A string or regex to use as delimiter.
 
     Returns
     -------
