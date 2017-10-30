@@ -51,8 +51,7 @@ class Pipeline:
         if metaActiveCols: self.addActiveCols(metaActiveCols, isMeta=True)
         self.sortCols = sortCols
         self.keyCol = None
-        self.links = links if isinstance(links, dict) else raise TypeError(
-                "`links` must be a dict.")
+        self.links = links if isinstance(links, dict) else None
         self.backup = []
 
     def _backup(self, message):
@@ -411,7 +410,6 @@ class Pipeline:
         False if user input begins with 'N' or 'n'.
         Otherwise asks user to input confirmation again.
         """
-        print(, end='')
         proceed = ''
         while not proceed:
             proceed = input(message, end='')
