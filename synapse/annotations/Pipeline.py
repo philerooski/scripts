@@ -11,7 +11,34 @@ class Pipeline:
     BACKUP_LENGTH = 50
 
     def __init__(self, syn, view=None, meta=None, activeCols=[],
-            metaActiveCols=[], link=None, sortCols=True):
+            metaActiveCols=[], links=None, sortCols=True):
+        """ Create a new Pipeline object.
+
+        Parameters
+        ----------
+        syn : synapseclient.Synapse
+            Synapse object to communicate with Synapse.org.
+        view : str or pandas.DataFrame
+            Optional. The "data". If a str, needs to be the Synapse ID of
+            a file view or table. Defaults to `None`.
+        meta : str, list, or pandas.DataFrame
+            Optional. The "metadata". If a str, can be the Synapse ID of
+            a file view, table, or other delimited file. If a list, will
+            concatenate the results of each utils.synread by column.
+            Defaults to `None`.
+        activeCols : str, list, dict, or pandas.DataFrame
+            Optional. Active columns to add. (See `self.addActiveColumns`).
+            Defaults to the empty list.
+        metaActiveCols : str, list, dict, or pandas.DataFrame
+            Optional. Active columns to add for the metadata.
+            (See `self.addActiveColumns`). Defaults to the empty list.
+        links : dict
+            Optional. Link values to add. (see `self.addLinks` or
+            `self.linkMetadata`). Defaults to `None`.
+        sortCols : bool
+            Optional. Whether to sort the columns lexicographically in
+            `view` and/or `meta`. Defaults to True.
+        """
         self.syn = syn
         self.df = view if view is None else self._parseView(view, sortCols)
         self.schema = self.syn.get(view) if isinstance(view,str) else None
@@ -19,22 +46,25 @@ class Pipeline:
                 self.df, pd.core.frame.DataFrame) else None
         self.activeCols = []
         if activeCols: self.addActiveCols(activeCols)
-        self.meta = meta if meta is None else self._parseView(meta, sortCols)
+        self.meta = meta if meta is None else self._parseView(meta, sortCols, isMeta=True)
         self.metaActiveCols = []
-        if metaActiveCols: self.addActiveCols(metaActiveCols, meta=True)
+        if metaActiveCols: self.addActiveCols(metaActiveCols, isMeta=True)
         self.sortCols = sortCols
         self.keyCol = None
-        self.link = link
+        self.links = links if isinstance(links, dict) else raise TypeError(
+                "`links` must be a dict.")
         self.backup = []
 
     def _backup(self, message):
+        """ Backup the state of `self` and store in `self.backup` """
         self.backup.append((Pipeline(
             self.syn, self.df, self.meta, self.activeCols, self.metaActiveCols,
-            self.link, self.sortCols), message))
+            self.links, self.sortCols), message))
         if len(self.backup) > self.BACKUP_LENGTH:
             self.backup = self.backup[1:]
 
     def undo(self):
+        """ Revert `self` to last recorded state. """
         if self.backup:
             backup, message = self.backup.pop()
             self.syn = backup.syn
@@ -45,33 +75,75 @@ class Pipeline:
             print("At last available change.")
 
     def head(self):
+        """ Print head of `self.df` """
         print(self.df.head())
 
-    def columns(self, style="letters"):
+    def columns(self, style="numbers"):
+        """ Pretty print `self.df.columns`.
+
+        Parameters
+        ----------
+        style : str
+            Optional. One of 'numbers' or 'letters'. Defaults to 'numbers'.
+        """
         if hasattr(self.df, 'columns'):
             self._prettyPrintColumns(self.df.columns, style)
         else:
             print("No columns.")
 
-    def metaColumns(self, style="letters"):
+    def metaColumns(self, style="numbers"):
+        """ Pretty print `self.meta.columns`.
+
+        Parameters
+        ----------
+        style : str
+            Optional. One of 'numbers' or 'letters'. Defaults to 'numbers'.
+        """
         if hasattr(self.meta, 'columns'):
             self._prettyPrintColumns(self.meta.columns, style)
         else:
             print("No columns.")
 
-    def activeColumns(self, style="letters"):
+    def activeColumns(self, style="numbers"):
+        """ Pretty print `self.activeCols`.
+
+        Parameters
+        ----------
+        style : str
+            Optional. One of 'numbers' or 'letters'. Defaults to 'numbers'.
+        """
         if self.activeCols:
             self._prettyPrintColumns(self.activeCols, style)
         else:
             print("No active columns.")
 
-    def metaActiveColumns(self, style="letters"):
+    def metaActiveColumns(self, style="numbers"):
+        """ Pretty print `self.metaActiveCols`.
+
+        Parameters
+        ----------
+        style : str
+            Optional. One of 'numbers' or 'letters'. Defaults to 'numbers'.
+        """
         if self.metaActiveCols:
             self._prettyPrintColumns(self.metaActiveColumns, style)
         else:
             print("No active columns.")
 
-    def addActiveCols(self, activeCols, path=False, meta=False):
+    def addActiveCols(self, activeCols, path=False, isMeta=False):
+        """ Add column names to `self.activeCols` or `self.metaActiveCols`.
+
+        Parameters
+        ----------
+        activeCols : str, list, dict, or DataFrame
+            Active columns to add.
+        path : bool
+            Optional. Whether the str passed in `activeCols` is a filepath.
+            Defaults to False.
+        meta : bool
+            Optional. Whether we are adding active columns to the data or
+            the metadata. Defaults to False.
+        """
         self._backup("addActiveCols")
         # activeCols can be a str, list, dict, or DataFrame
         if isinstance(activeCols, str) and not path:
@@ -95,13 +167,32 @@ class Pipeline:
             pass
 
     def addDefaultValues(self, colVals, backup=True):
+        """ Set all values in a column of `self.df` to a single value.
+
+        Parameters
+        ----------
+        colVals : dict
+            A mapping from column names to values
+        backup : bool
+            Optional. Whether to save the state of `self` before updating
+            column values. Defaults to True.
+        """
         if backup: self._backup("addDefaultValues")
         for k in colVals:
             self.df[k] = colVals[k]
 
     def addKeyCol(self):
+        """ Add a key column to `self.df`.
+
+        A key column is a column in `self.df` whose values can be matched in a
+        one-to-one manner with the column values of a column in `self.meta`.
+        Usually this involves applying a regular expression to one of the columns
+        in `self.df`. After a regular expression which satisfies the users
+        requirements is found, the key column is automatically added to `self.df`
+        with the same name as the column matched upon in `self.meta`.
+        """
         self._backup("addKeyCol")
-        link = self._linkData(1)
+        link = self._linkCols(1)
         dataKey, metaKey = link.popitem()
         regex = ''
         print("Data", "\n\n")
@@ -123,7 +214,7 @@ class Pipeline:
                 for i in range(len(before_regex)):
                     print(after_regex[i], "<-", before_regex[i])
                 print()
-                proceedAnyways = self._getUserConfirmation()
+                proceedAnyways = self._getUserConfirmation("Proceed anyways? (y) or (n): ")
                 if proceedAnyways:
                     break
                 else:
@@ -134,6 +225,19 @@ class Pipeline:
         self.df[metaKey] = newCol
 
     def _inputDefault(self, prompt, prefill=''):
+        """ Get input from the user from a prompt with preexisting text.
+
+        Parameters
+        ----------
+        prompt : str
+            Prompt to user.
+        prefill : str
+            Preexisting text to fill input with.
+
+        Returns
+        -------
+        User input.
+        """
         readline.set_startup_hook(lambda: readline.insert_text(prefill))
         try:
             return input(prompt)
@@ -141,24 +245,58 @@ class Pipeline:
            readline.set_startup_hook()
 
     def addFileFormatCol(self, referenceCol='name', fileFormatColName='fileFormat'):
+        """ Add a file format column using a preprogrammed regular expression.
+
+        Parameters
+        ----------
+        referenceCol : str
+            Optional. Column to parse file extension from. Defaults to 'name'.
+        fileFormatColName : str
+            Optional. Name of newly created column. Defaults to 'fileFormat'.
+        """
         self._backup("addFileFormatCol")
         filetypeCol = utils.makeColFromRegex(self.df[referenceCol].values, "extension")
         self.df[fileFormatColName] = filetypeCol
 
     def addLinks(self, links):
+        """ Add link values to `self.links`
+
+        Parameters
+        ----------
+        links : dict
+            Link values to add
+
+        Returns
+        -------
+        Links added to `self.links`
+        """
         self._backup("addLinks")
         if not isinstance(links, dict):
             raise TypeError("`links` must be a dictionary-like object")
-        if not self.link:
-            self.link = links
+        if not self.links:
+            self.links = links
         else:
             for l in links:
-                self.link[l] = links[l]
+                self.links[l] = links[l]
         return links
 
     def isValidKeyPair(self, dataCol=None, metaCol=None):
+        """ Check if two columns are both subsets of each other (i.e., have
+            the same values).
+
+        Parameters
+        ----------
+        dataCol : str
+            Column in `self.df`.
+        metaCol : str
+            Column in `self.meta`.
+
+        Returns
+        -------
+        Boolean
+        """
         if dataCol is None and metaCol is None:
-            dataCol, metaCol = self._linkData(1).popitem()
+            dataCol, metaCol = self._linkCols(1).popitem()
         if set(self.df[dataCol]).difference(self.meta[metaCol]):
             print("The following values are missing:", end="\n")
             for i in set(self.df[dataCol]).difference(self.meta[metaCol]):
@@ -167,9 +305,21 @@ class Pipeline:
         return True
 
     def linkMetadata(self, links=None):
+        """ Link data columns to metadata columns.
+
+        Parameters
+        ----------
+        links : dict
+            Optional. Mappings from data columns to metadata columns to add
+            to `self.links`. Defaults to `self._linkCols`.
+
+        Returns
+        -------
+        A dictionary of newly created links.
+        """
         self._backup("linkMetadata")
         if links is None:
-            links = self._linkData(-1)
+            links = self._linkCols(-1)
         for v in links.values():
             if not v in self.metaActiveCols:
                 self.metaActiveCols.append(v)
@@ -177,16 +327,42 @@ class Pipeline:
         return links
 
     def modifyColumn(self, col, mod):
+        """ Change values in a column according to a mapping.
+
+        Parameters
+        ----------
+        col : str
+            The column to modify.
+        mod : dict
+            Mappings from the old to new values.
+        """
         self._backup("modifyColum")
         oldCol = self.df[col].values
         if isinstance(mod, dict):
-            newCol = [mod[v] for v in oldCol]
+            newCol = [mod[v] if v in mod else v for v in oldCol]
         self.df[col] = newCol
 
-    def _parseView(self, view, sortCols):
+    def _parseView(self, view, sortCols, isMeta=False):
+        """ Turn `view` into a pandas DataFrame.
+
+        Parameters
+        ----------
+        view : str, list, or pandas.DataFrame
+            `list` is only supported if `isMeta` is True.
+        sortCols : bool
+            whether to order columns lexicographically in the returned DataFrame.
+
+        Returns
+        -------
+        A pandas.DataFrame
+
+        Raises
+        ------
+        TypeError if view is not a str, list, or pandas.DataFrame
+        """
         if isinstance(view, str):
             return utils.synread(self.syn, view, sortCols)
-        elif isinstance(view, list):
+        elif isinstance(view, list) and meta:
             return utils.combineSynapseTabulars(self.syn, view)
         elif isinstance(view, pd.core.frame.DataFrame):
             if sortCols:
@@ -195,22 +371,20 @@ class Pipeline:
         else:
             raise TypeError("{} is not a supported data input type".format(type(view)))
 
-    def parseMetadata(self, metadata, sortCols):
-        # metadata can be a str, list, or DataFrame
-        if isinstance(metadata, str):
-            return utils.synread(self.syn, metadata)
-        elif isinstance(metadata, list):
-            return utils.combineSynapseTabulars(self.syn, metadata)
-        else:
-             return deepcopy(metadata)
-
     def publish(self, verify = True):
+        """ Store `self.df` back to the file view it was derived from on Synapse.
+
+        Parameters
+        ----------
+        verify : bool
+            Optional. Whether to warn of possible errors in `self.df`. Defaults to True.
+        """
         warnings = self._validate()
         if len(warnings):
             for w in warnings:
                 print(w)
             print()
-            continueAnyways = self._getUserConfirmation()
+            continueAnyways = self._getUserConfirmation("Proceed anyways? (y) or (n): ")
             if not continueAnyways:
                 print("Publish canceled.")
                 return
@@ -223,11 +397,24 @@ class Pipeline:
         print("You're good to go :~)")
         return self.schema.id
 
-    def _getUserConfirmation(self):
-        print("Proceed anyways? (y) or (n): ", end='')
+    def _getUserConfirmation(self, message):
+        """ Get confirmation from user.
+
+        Parameters
+        ----------
+        message : str
+            Message to print when asking for confirmation.
+
+        Returns
+        -------
+        True if user input begins with 'Y' or 'y'.
+        False if user input begins with 'N' or 'n'.
+        Otherwise asks user to input confirmation again.
+        """
+        print(, end='')
         proceed = ''
-        while not len(proceed):
-            proceed = input()
+        while not proceed:
+            proceed = input(message, end='')
             if len(proceed) and not proceed[0] in ['Y', 'y', 'N', 'n']:
                 proceed = ''
                 print("Please enter 'y' or 'n': ", end='')
@@ -237,9 +424,14 @@ class Pipeline:
                 return False
 
     def onweb(self):
+        """ View the file view which `self.df` derives from in a browser. """
         self.syn.onweb(self.schema.id)
 
     def _validate(self):
+        """ Validate `self.df` before publishing to warn of possible errors.
+
+        Currently only checks if any active columns have any null values.
+        """
         warnings = []
         # check that no columns have null values
         null_cols = self.df[self.activeCols].isnull().any()
@@ -250,6 +442,13 @@ class Pipeline:
         return warnings
 
     def removeActiveCols(self, activeCols):
+        """ Remove a column name from `self.activeCols`
+
+        Parameters
+        ----------
+        activeCols : str or list-like
+            Column name(s) to remove.
+        """
         self._backup("removeActiveCols")
         if isinstance(activeCols, str):
             self.activeCols.remove(activeCols)
@@ -258,6 +457,15 @@ class Pipeline:
                 self.activeCols.remove(c)
 
     def _getUniqueCols(self, newCols, preexistingCols):
+        """ Replace `preexisingCols` with `newCols`.
+
+        Parameters
+        ----------
+        newCols : list of dict-like
+            New columns to replace columns in `preexisingCols`.
+        preexisingCols : list of dict-like
+            Old columns to be replaced by `newCols` (if a replacement is present).
+        """
         preexistingColNames = [c['name'] for c in preexistingCols]
         uniqueCols = []
         for c in newCols:
@@ -270,11 +478,20 @@ class Pipeline:
         return uniqueCols
 
     def valueCounts(self):
+        """ Print the value counts of all `self.activeCols`. """
         for c in self.activeCols:
-            print(self.df[c].value_counts(dropna=False))
-            print()
+            print(self.df[c].value_counts(dropna=False), end="\n")
 
     def _prettyPrintColumns(self, cols, style):
+        """ Helper function to print columns in a legible way.
+
+        Parameters
+        ----------
+        cols : list-like
+            List of strings to print.
+        style : str
+            One of 'letters' or 'numbers'.
+        """
         if style == 'letters':
             for i in range(len(cols)):
                 padding = " " if (len(cols) > 26 and (65 + i <= 90)) else ""
@@ -289,6 +506,39 @@ class Pipeline:
                 print(str(i), "{}|".format(padding), cols[i])
 
     def addFileView(self, name, parent, scope, addCols=None):
+        """ Create and store a file view for further manipulation.
+
+        Parameters
+        ----------
+        name : str
+            The name of the file view.
+        parent : str
+            Synapse ID of project to store file view within.
+        scope : str or list
+            Synapse IDs of items to include in file view.
+        addCols : dict, list, or str
+            Columns to add in addition to the default file view columns.
+
+        If `addCols` is a dict:
+            Add keys as columns. If a key's value is `None`, then insert an empty
+            column. Otherwise, set the `defaultValue` of the column to that value.
+            After setting `self.df` to the pandas DataFrame version of the newly
+            created file view, all rows in each column will be set to its
+            `defaultValue` (unless there is no `defaultValue`, in which case the
+            column will be empty). The file view will not be updated on Synapse
+            until `self.publish` is called.
+        If `addCols` is a list:
+            Add columns to schema with no `defaultValue`. `self.df` will be
+            unchanged from the file view that is stored on Synapse.
+        If 'addCols is a str:
+            Assumes the string is a filepath. Attempts to read in the filepath as
+            a two-column .csv file, and then proceeds as if `addCols` was a dict,
+            where the first column are the keys and the second column are the values.
+
+        Returns
+        -------
+        Synapse ID of newly created fileview.
+        """
         self._backup("newFileView")
         if isinstance(scope, str): scope = [scope]
         params = {'scope': scope, 'viewType': 'file'}
@@ -313,6 +563,16 @@ class Pipeline:
         return self.schema.id
 
     def inferValues(self, col, referenceCols):
+        """ Fill in values for indices which match on `referenceCols`
+        and which have a single, unique, non-NaN value in `col`.
+
+        Parameters
+        ----------
+        col : str
+            Column to fill with values.
+        referenceCols : list or str
+            Column(s) to match on.
+        """
         self._backup("inferValues")
         groups = self.df.groupby(referenceCols)
         values = groups[col].unique()
@@ -325,24 +585,61 @@ class Pipeline:
                     referenceCols, k))
 
     def transferMetadata(self, cols=None, on=None, how='left', dropOn=True):
+        """ Copy metadata to `self.df`, matching on `self.keyCol`.
+
+        Parameters
+        ----------
+        cols : list-like
+            Optional. A subset of columns which have been linked
+            with `self.linkMetadata` to transfer metadata values to.
+            Defaults to all linked columns.
+        on : str
+            Optional. Column to match data with metadata.
+            Defaults to `self.keyCol`.
+        how : str
+            Optional. How to merge the metadata on the data.
+            Defaults to 'left' (keep only the keys in the data).
+        dropOn : bool
+            Optional. Drops the column, `on`, used to align the data
+            with the metadata. Defaults to True.
+
+        After adding a key column (`self.addKeyCol`) and linking the data
+        columns to the metadata columns (`self.linkMetadata`), transfer the
+        values from the metadata to the data, aligning on `on`.
+        """
         if on is None: on = self.keyCol
-        if not self.link: raise RuntimeError("Need to link metadata values first.")
+        if not self.links: raise RuntimeError("Need to link metadata values first.")
         self._backup("transferMetadata")
         if not cols:
-            cols = list(self.link.keys())
+            cols = list(self.links.keys())
             if on in cols:
                 cols.pop(cols.index(on))
-        relevant_meta = self.meta[list(set(self.link.values()))]
+        relevant_meta = self.meta[list(set(self.links.values()))]
         merged = self.df.merge(relevant_meta, on=on, how=how)
         merged = merged.drop_duplicates()
         print("original", self.df.shape)
         print("merged", merged.shape)
         for c in cols:
-            self.df[c] = merged[self.link[c]].values
+            self.df[c] = merged[self.links[c]].values
         if dropOn:
             self.df.drop(on, 1, inplace=True)
 
-    def _linkData(self, iters):
+    def _linkCols(self, iters):
+        """ Helper function to return a dictionary with data columns as keys
+        and metadata columns as values. Useful when drawing links between
+        the data and the metadata.
+
+        Parameters
+        ----------
+        iters : int
+            Number of iterations before returning a dictionary. If set to a
+            negative number, will iterate until a newline is entered as input.
+
+        Returns
+        -------
+        Dictionary containing select data column names as keys and metadata
+            column names as values.
+        """
         links = {}
         def _verifyInputIntegrity(i):
             if i is '': return -1
