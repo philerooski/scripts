@@ -43,18 +43,18 @@ class Pipeline:
         self.view = view if view is None else self._parseView(view, sortCols)
         self._schema = self.syn.get(view) if isinstance(view,str) else None
         self._index = self.view.index if isinstance(
-                self.view, pd.core.frame.DataFrame) else None
+                self.view, pd.DataFrame) else None
         self._activeCols = []
-        if activeCols: self.addActiveCols(activeCols)
+        if activeCols: self.addActiveCols(activeCols, backup=False)
         self._meta = meta if meta is None else self._parseView(meta, sortCols, isMeta=True)
         self._metaActiveCols = []
-        if metaActiveCols: self.addActiveCols(metaActiveCols, isMeta=True)
+        if metaActiveCols: self.addActiveCols(metaActiveCols, isMeta=True, backup=False)
         self._sortCols = sortCols
         self.keyCol = None
         self.links = links if isinstance(links, dict) else None
         self._backup = []
 
-    def _backup(self, message):
+    def backup(self, message):
         """ Backup the state of `self` and store in `self._backup` """
         self._backup.append((Pipeline(
             self.syn, self.view, self._meta, self._activeCols, self._metaActiveCols,
@@ -67,8 +67,8 @@ class Pipeline:
         if self._backup:
             backup, message = self._backup.pop()
             self.syn = backup.syn
-            self.view = backup.df
-            self._activeCols = backup.activeCols
+            self.view = backup.view
+            self._activeCols = backup._activeCols
             print("Undo: {}".format(message))
         else:
             print("At last available change.")
@@ -139,7 +139,7 @@ class Pipeline:
         else:
             print("No active columns.")
 
-    def addActiveCols(self, activeCols, path=False, isMeta=False):
+    def addActiveCols(self, activeCols, path=False, isMeta=False, backup=True):
         """ Add column names to `self._activeCols` or `self._metaActiveCols`.
 
         Parameters
@@ -153,7 +153,8 @@ class Pipeline:
             Optional. Whether we are adding active columns to the data or
             the metadata. Defaults to False.
         """
-        self.backup("addActiveCols")
+        if backup:
+            self.backup("addActiveCols")
         # activeCols can be a str, list, dict, or DataFrame
         if isinstance(activeCols, str) and not path:
             if meta:
@@ -165,7 +166,7 @@ class Pipeline:
                 for c in activeCols: self._metaActiveCols.append(c)
             else:
                 for c in activeCols: self._activeCols.append(c)
-        elif isinstance(activeCols, pd.core.frame.DataFrame):
+        elif isinstance(activeCols, pd.DataFrame):
             # assumes column names are in first column
             for c in activeCols[activeCols.columns[0]]:
                 if meta:
@@ -264,10 +265,11 @@ class Pipeline:
             Optional. Name of newly created column. Defaults to 'fileFormat'.
         """
         self.backup("addFileFormatCol")
-        filetypeCol = utils.makeColFromRegex(self.view[referenceCol].values, "extension")
+        regex = r"\.(\w+)(?:\.gz)?$"
+        filetypeCol = utils.makeColFromRegex(self.view[referenceCol].values, regex)
         self.view[fileFormatColName] = filetypeCol
 
-    def addLinks(self, links):
+    def addLinks(self, links, backup=True):
         """ Add link values to `self.links`
 
         Parameters
@@ -279,7 +281,8 @@ class Pipeline:
         -------
         Links added to `self.links`
         """
-        self.backup("addLinks")
+        if backup:
+            self.backup("addLinks")
         if not isinstance(links, dict):
             raise TypeError("`links` must be a dictionary-like object")
         if not self.links:
@@ -332,7 +335,7 @@ class Pipeline:
         for v in links.values():
             if not v in self._metaActiveCols:
                 self._metaActiveCols.append(v)
-        self.addLinks(links)
+        self.addLinks(links, False)
         return links
 
     def modifyColumn(self, col, mod):
@@ -373,30 +376,31 @@ class Pipeline:
             return utils.synread(self.syn, view, sortCols)
         elif isinstance(view, list) and meta:
             return utils.combineSynapseTabulars(self.syn, view)
-        elif isinstance(view, pd.core.frame.DataFrame):
+        elif isinstance(view, pd.DataFrame):
             if sortCols:
                 view = view.sort_index(1)
             return deepcopy(view)
         else:
             raise TypeError("{} is not a supported data input type".format(type(view)))
 
-    def publish(self, verify = True):
+    def publish(self, validate = True):
         """ Store `self.view` back to the file view it was derived from on Synapse.
 
         Parameters
         ----------
-        verify : bool
+        validate : bool
             Optional. Whether to warn of possible errors in `self.view`. Defaults to True.
         """
-        warnings = self._validate()
-        if len(warnings):
-            for w in warnings:
-                print(w)
-            print()
-            continueAnyways = self._getUserConfirmation("Proceed anyways? (y) or (n): ")
-            if not continueAnyways:
-                print("Publish canceled.")
-                return
+        if validate :
+            warnings = self._validate()
+            if len(warnings):
+                for w in warnings:
+                    print(w)
+                print()
+                continueAnyways = self._getUserConfirmation("Proceed anyways? (y) or (n): ")
+                if not continueAnyways:
+                    print("Publish canceled.")
+                    return
         t = sc.Table(self._schema.id, self.view)
         print("Storing to Synapse...")
         t_online = self.syn.store(t)
@@ -422,7 +426,7 @@ class Pipeline:
         """
         proceed = ''
         while not proceed:
-            proceed = input(message, end='')
+            proceed = input(message)
             if len(proceed) and not proceed[0] in ['Y', 'y', 'N', 'n']:
                 proceed = ''
                 print("Please enter 'y' or 'n': ", end='')
@@ -649,11 +653,11 @@ class Pipeline:
             column names as values.
         """
         links = {}
-        def _verifyInputIntegrity(i):
+        def _verifyInputIntegrity(i, view):
             if i is '': return -1
             try:
                 i = int(i)
-                assert i < len(self.view.columns) and i >= 0
+                assert i < len(view.columns) and i >= 0
             except:
                 print("Please enter an integer corresponding to "
                         "one of the columns above.", "\n")
@@ -666,7 +670,7 @@ class Pipeline:
             data_col = None
             while data_col is None:
                 data_col = input("Select a data column: ")
-                data_col = _verifyInputIntegrity(data_col)
+                data_col = _verifyInputIntegrity(data_col, self.view)
             if data_col == -1: return links
             print("\n", "Metadata", "\n")
             self.metaColumns("numbers")
@@ -674,7 +678,7 @@ class Pipeline:
             metadata_col = None
             while metadata_col is None:
                 metadata_col = input("Select a metadata column: ")
-                metadata_col = _verifyInputIntegrity(metadata_col)
+                metadata_col = _verifyInputIntegrity(metadata_col, self._meta)
             if metadata_col == -1: return links
             data_val = self.view.columns[data_col]
             metadata_val = self._meta.columns[metadata_col]

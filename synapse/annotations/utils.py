@@ -51,7 +51,7 @@ def convertClipboardToDict(sep):
     -------
     A dictionary derived from clipboard contents.
     """
-    df = pd.read_clipboard(sep, header=None)
+    df = pd.read_clipboard(sep, header=None, engine='python')
     d = {k: v for k, v in zip(df[0], df[1])}
     return d
 
@@ -180,7 +180,6 @@ def makeColFromRegex(referenceList, regex):
     -------
     The list resulting from mapping `regex` to `referenceList`.
     """
-    if regex == 'extension': regex = r"\.(\w+)(?:\.gz)?$"
     p = re.compile(regex)
     if not p.groups:
         raise RuntimeError("`regex` must have at least one capture group.")
