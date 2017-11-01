@@ -37,12 +37,14 @@ We need to perform the following operations:
      host - synapse
      ```
  * Match data columns to metadata columns in the following fashion:
+     
      |data|metadata|
      |---|---|
-     |specimenID|ChIP_Seq_ID| 
+     |specimenID|ChIP_Seq_ID|
      |individualID|Individual ID|
      |assayTarget|Histone Mark/Input|
      |cellType|NeuN|
+     
  * cellType should be `NeuN+` or `NeuN-` depending on whether its metadata is `Pos` or `Neg`.
  * Add a file format column, leaving off any compression extensions (like .gz).
 
