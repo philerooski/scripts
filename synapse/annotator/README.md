@@ -1,3 +1,5 @@
+**Development moved to** https://github.com/Sage-Bionetworks/annotator
+
 # annotator &mdash; a Synapse annotations automation tool
 
  * Streamlines creating file views, adding default annotation values, and linking and merging metadata with data.
