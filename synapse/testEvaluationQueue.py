@@ -86,10 +86,19 @@ def writeSubmissions(sampleSubmission, indexCols=None, filetype="csv"):
             output.write(result)
     # wrong delimiter
     sample.to_csv("{}/wrongDelimiter.{}".format(
-        TEST_SUBMISSION_PATH, filetype), sep="\\")
+        TEST_SUBMISSION_PATH, filetype), sep=" ")
     # duplicated indices
     sample.append(sample.iloc[0]).to_csv("{}/duplicateIndices.{}".format(
         TEST_SUBMISSION_PATH, filetype), sep=delimiter)
+    # infinite values
+    sample_copy = sample.copy()
+    sample_copy.iloc[0,0] = float('inf')
+    sample_copy.to_csv("{}/infiniteValue.{}".format(
+        TEST_SUBMISSION_PATH, filetype), index=True, sep=delimiter)
+    # a REALLY BIG (but less than infinite) value
+    sample_copy.iloc[0,0] = 2e64
+    sample_copy.to_csv("{}/reallyBigValue.{}".format(
+        TEST_SUBMISSION_PATH, filetype), index=True, sep=delimiter)
     # one, two, and five columns of random floats, ints, strings with/without NAs
     for i, t, na in product([1,2,5], [float, int, str], [True, False]):
         cases = {float: "float", int: "int", str: "str"}
